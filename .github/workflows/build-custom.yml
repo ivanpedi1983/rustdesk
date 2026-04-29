@@ -1,0 +1,79 @@
+name: Build HkRemoto Windows x64
+on:
+  workflow_dispatch:
+env:
+  DEFAULT_RENDEZVOUS_SERVER: ""
+  DEFAULT_RS_PUB_KEY: ""
+  DEFAULT_RELAY_SERVER: ""
+jobs:
+  build-windows-x64:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+        with:
+          repository: ivanpedi1983/rustdesk
+          ref: 'master'
+          submodules: recursive
+      - name: Instalar Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - name: Instalar Flutter stable
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: Activar Flutter Windows desktop
+        run: |
+          flutter config --enable-windows-desktop
+          flutter --version
+          flutter doctor -v
+      - name: Configurar LLVM
+        run: |
+          echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_ENV -Append
+      - name: Instalar vcpkg y dependencias
+        run: |
+          git clone https://github.com/microsoft/vcpkg $env:USERPROFILE\vcpkg
+          & $env:USERPROFILE\vcpkg\bootstrap-vcpkg.bat
+          echo "VCPKG_ROOT=$env:USERPROFILE\vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Append
+          $pkgs = @('libvpx:x64-windows-static','libyuv:x64-windows-static','opus:x64-windows-static','aom:x64-windows-static')
+          & $env:USERPROFILE\vcpkg\vcpkg.exe install $pkgs --classic
+      - name: Caché cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+      - name: Descargar Sciter DLL
+        run: |
+          New-Item -ItemType Directory -Force -Path target\release | Out-Null
+          New-Item -ItemType Directory -Force -Path target\x86_64-pc-windows-msvc\release | Out-Null
+          Invoke-WebRequest -UseBasicParsing -Uri https://raw.githubusercontent.com/c-smile/sciter-sdk/master/bin.win/x64/sciter.dll -OutFile target\release\sciter.dll
+          Copy-Item target\release\sciter.dll target\x86_64-pc-windows-msvc\release\sciter.dll
+      - name: Instalar Python
+        run: choco install -y python
+      - name: Personalizar nombre
+        run: |
+          (Get-Content Cargo.toml) -replace 'name = "rustdesk"', 'name = "HkRemoto"' | Set-Content Cargo.toml
+          (Get-Content Cargo.toml) -replace 'default-run = "rustdesk"', 'default-run = "HkRemoto"' | Set-Content Cargo.toml
+      - name: Activar feature inline en Cargo.toml
+        run: |
+          (Get-Content Cargo.toml) -replace 'default = \["use_dasp"\]', 'default = ["use_dasp", "inline"]' | Set-Content Cargo.toml
+      - name: Incrustar UI en ejecutable
+        run: python res/inline-sciter.py
+      - name: Compilar
+        run: |
+          $env:VCPKG_ROOT = "$env:VCPKG_ROOT"
+          cargo build --release --target x86_64-pc-windows-msvc
+      - name: Subir artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: HkRemoto-Windows-x64
+          path: |
+            target\x86_64-pc-windows-msvc\release\HkRemoto.exe
+            target\release\sciter.dll
+          retention-days: 7
